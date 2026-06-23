@@ -3,7 +3,7 @@ import pandas as pd
 import time
 import statsmodels.api as sm
 from linearmodels import PanelOLS
-from soft_dtw_cuda import SoftDTW
+from dtw import SoftDTW
 
 import torch
 import torch.nn as nn
@@ -27,14 +27,15 @@ def train(train_valid_data,model_state_path,args):
     torch.cuda.manual_seed(random_seed)
     torch.cuda.manual_seed_all(random_seed)
 
-    long_data = NormalYDataset(train_valid_data, window_length=args.window_length, horizon=args.horizon, interval=args.interval, quantile=1-args.long_pct)
+    long_data = NormalYDataset(train_valid_data, window_length=args.window_length, horizon=args.horizon, interval=args.interval, quantile=1-args.long_ratio)
     all_data = NormalYDataset(train_valid_data, window_length=args.window_length, horizon=args.horizon, interval=args.interval)
     
-    indices = torch.randperm(len(all_data)).tolist()
+    #indices = torch.randperm(len(all_data)).tolist()
+    indices = list(range(len(all_data)))
     split = int(0.7 * len(indices))
 
     train_indices = indices[:split]
-    valid_indices = indices[split:]
+    valid_indices = indices[split+5:]
 
     train_set_long = torch_data.Subset(long_data, train_indices)
     train_set = torch_data.Subset(all_data, train_indices)
@@ -52,7 +53,7 @@ def train(train_valid_data,model_state_path,args):
         raise ValueError("model needs to be gru_gnn or gru")
     forecast_loss = CorrLoss()
     my_optim = torch.optim.AdamW(params=model.parameters(), lr=args.lr, weight_decay=args.w_decay)
-    my_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=my_optim, T_max=args.epoch,eta_min=1e-4) 
+    my_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=my_optim, T_max=args.epoch//args.lr_step_epoch,eta_min=args.lr_min)
     
     model.train()
     for epoch in range(args.epoch_long):
@@ -69,7 +70,7 @@ def train(train_valid_data,model_state_path,args):
             my_optim.step()
             loss_total += float(loss)
                 
-        average_loss_train=loss_total/len(train_set)
+        average_loss_train=loss_total/len(train_set_long)
         print(f'LongEndTraining Epoch {epoch}, time{time.time()-epoch_start_time}, trainset loss{average_loss_train}')
         
     last_valid_loss = np.inf
@@ -79,6 +80,7 @@ def train(train_valid_data,model_state_path,args):
     valid_loss_epochs=[]
         
     for epoch in range(args.epoch):
+
         model.train()
         epoch_start_time = time.time()
         total_loss_train = 0
@@ -108,13 +110,12 @@ def train(train_valid_data,model_state_path,args):
         average_loss_valid=total_loss_valid/len(valid_set)
         valid_loss_epochs.append(average_loss_valid)
         print(f'AllTraining Epoch {epoch}, time{time.time()-epoch_start_time}, trainset loss{average_loss_train}, validset loss{average_loss_valid}')
-            
-        if (epoch+1) % args.exponential_decay_epoch == 0:
+
+        if (args.lr_step_epoch>0) and ((epoch+1) % args.lr_step_epoch == 0):
             my_lr_scheduler.step()
             
         if average_loss_valid < last_valid_loss:
             valid_loss_non_decrease_count = 0
-            #torch.save(model.state_dict(), model_state_path)
         else:
             valid_loss_non_decrease_count += 1 
         last_valid_loss=average_loss_valid
@@ -125,8 +126,7 @@ def train(train_valid_data,model_state_path,args):
         
         if valid_loss_non_decrease_count >= args.early_stop_epoch:
             return train_loss_epochs,valid_loss_epochs
-        # if epoch == args.epoch-1 :
-        #     torch.save(model.state_dict(), model_state_path)
+    
     return train_loss_epochs,valid_loss_epochs
         
 def test(test_data,return_data,model_state_path,test_result_path,test_portfolio_path,args):
@@ -374,10 +374,10 @@ def dd_analysis(portfolio,k=3):
         if (portfolio['DD']<0).sum()==0:
             break
         midx=portfolio.loc[~portfolio['DD_Flag'].astype(bool)]['DD'].idxmin()
-        begin=portfolio.loc[:midx].query("DD>=0").index[-1]+1
+        begin=portfolio.loc[:midx].query("DD>=0").index[-1]
         end_df=portfolio.loc[midx:].query("DD>=0")
         if len(end_df)>0:
-            end=end_df.index[0]-1
+            end=end_df.index[0]
         else:
             end=len(portfolio)-1
         portfolio.loc[begin:end,'DD_Flag']=1

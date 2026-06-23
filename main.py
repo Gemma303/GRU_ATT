@@ -10,21 +10,21 @@ from plotly.subplots import make_subplots
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--random_seed', type=int, default=52)
-parser.add_argument('--train_length', type=int, default=1260)
-parser.add_argument('--valid_length', type=int, default=447)
+parser.add_argument('--train_valid_length', type=int, default=1707)
 parser.add_argument('--window_length', type=int, default=126)
 parser.add_argument('--horizon', type=int, default=5)
 parser.add_argument('--interval', type=int, default=1)
-parser.add_argument('--long_pct', type=int, default=0.25)
+parser.add_argument('--long_ratio', type=int, default=0.25)
 parser.add_argument('--gru_lengths', type=list, default=[126,20,60])
 parser.add_argument('--k_dim', type=int, default=8)
 parser.add_argument('--dropout_rate', type=float, default=0.2)
 parser.add_argument('--device', type=str, default='cuda')
 parser.add_argument('--lr', type=float, default=8e-4)
+parser.add_argument('--lr_min', type=float, default=1e-4)
 parser.add_argument('--w_decay', type=float, default=1e-3)
 parser.add_argument('--epoch', type=int, default=40)
 parser.add_argument('--epoch_long', type=int, default=5)
-parser.add_argument('--exponential_decay_epoch', type=int, default=1)
+parser.add_argument('--lr_step_epoch', type=int, default=1)
 parser.add_argument('--early_stop_epoch', type=int, default=10)
 parser.add_argument('--k_pattern', type=int, default=50)
 parser.add_argument('--k_pattern_test', type=int, default=20)
@@ -35,7 +35,6 @@ parser.add_argument('--model_state', type=str, default='gru_gnn.pth')
 parser.add_argument('--test_results', type=str, default='test_forecast.pickle')
 parser.add_argument('--test_portfolio', type=str, default='test_portfolio.pickle')
 parser.add_argument('--pattern_data', type=str, default='pattern_data.pickle')
-parser.add_argument('--dd_periods', type=str, default='dd_periods.pickle')
 parser.add_argument('--train', type=bool, default=True)
 parser.add_argument('--evaluate', type=bool, default=True)
 parser.add_argument('--signal_compare', type=bool, default=True)
@@ -46,21 +45,20 @@ parser.add_argument('--model', type=str, default='gru_gnn')
 args = parser.parse_args()
 if __name__ == '__main__':
     
-    model_state_path=os.path.join('model_states',args.model_state)
-    test_result_path=os.path.join('results',args.test_results)
-    test_portfolio_path=os.path.join('results',args.test_portfolio)
+    model_state_path=os.path.join('results','trained_model',args.model_state)
+    test_result_path=os.path.join('results','test_results',args.test_results)
+    test_portfolio_path=os.path.join('results','test_results',args.test_portfolio)
     pattern_path=os.path.join('data',args.pattern_data)
-    dd_path=os.path.join('results',args.dd_periods)
     
     price_data=pd.read_pickle(os.path.join('data',args.price_data))
-    test_data_price=price_data['ClosePrice_adj'].unstack().sort_index().iloc[args.train_length+args.valid_length-args.window_length-1:]
+    test_data_price=price_data['ClosePrice_adj'].unstack().sort_index().iloc[args.train_valid_length-args.window_length-1:]
 
     return_data=pd.read_pickle(os.path.join('data',args.return_data))
     return_data_pivot=return_data['DailyReturn'].unstack().sort_index()
     normdata=return_data_pivot.subtract(return_data_pivot.mean(1),0).divide(return_data_pivot.std(1),0)
     
-    train_valid_data=normdata.iloc[:args.train_length+args.valid_length]
-    test_data=normdata.iloc[args.train_length+args.valid_length-args.window_length:]
+    train_valid_data=normdata.iloc[:args.train_valid_length]
+    test_data=normdata.iloc[args.train_valid_length-args.window_length:]
     
     if args.train:
         print("Training begins.")
@@ -75,7 +73,7 @@ if __name__ == '__main__':
         fig.update_yaxes(title_text="Training Loss", row=1, col=1)
         fig.update_yaxes(title_text="Validation Loss", row=1, col=2)
         fig.update_layout(width=1000, height=500,showlegend=False)
-        with open("results/train_results.html", "w") as f:
+        with open("results/training_loss/training_loss.html", "w") as f:
             f.write(fig.to_html(full_html=False, include_plotlyjs='cdn'))
         
         end_time = datetime.now().timestamp()
@@ -98,7 +96,7 @@ if __name__ == '__main__':
 
         LSPortfolio_DD=LSPortfolio.reset_index().rename(columns={0:'Return'})
         LSPortfolio_DD,dd_results=dd_analysis(LSPortfolio_DD,k=args.top_drawdown_periods)
-        with open("results/test_results.html", "w") as f:
+        with open("results/test_results/test_results.html", "w") as f:
             f.write(f"RankIC: {np.round(RankIC,4)}, RankICIR: {np.round(RankICIR,4)}<br>")
             f.write("Long Only Portfolio:<br>")
             f.write(f"Annualized Average Return: {np.round(LongPortfolio.mean()*252/5,4)}, Annualized Sharpe Ratio: {np.round(LongPortfolio.mean()/LongPortfolio.std()*np.sqrt(252/5),4)}<br>")
@@ -139,7 +137,7 @@ if __name__ == '__main__':
         start_time = datetime.now().timestamp()
         signal_df=pd.read_pickle(test_result_path)
         res1,res2,res3=get_reg_results(signal_df,return_data,args.horizon)
-        with open("results/signal_compare_results.html", "w") as f:
+        with open("results/test_results/signal_compare_results.html", "w") as f:
             f.write(f"Univariate regression of weekly return over each signal <br>")
             f.write(res1.to_html())
             f.write("<br><br>")
@@ -169,7 +167,7 @@ if __name__ == '__main__':
                         .set_properties(**{'border': '1px black solid','padding':'8px'})
                         .set_table_attributes('style="border-collapse: collapse; border: 1px black solid;"')
                         .set_table_styles([{'selector': 'th', 'props': [('border', '1px solid black')]}]))
-        with open("results/pattern_results.html", "w") as f:
+        with open("results/test_results/pattern_results.html", "w") as f:
             f.write("Confusion matrix of chart pattern signals and gru_gnn <br>")
             f.write(cm_signal_pattern.to_html())
             f.write("<br><br>")
